@@ -1,11 +1,12 @@
-import 'dart:io';
+import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_quill/flutter_quill.dart' hide Text;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tuple/tuple.dart';
 
 import '../../../core/utils/date_formats.dart';
-import '../../../core/widgets/empty_state.dart';
 import '../data/sqlite_diary_repository.dart';
 import '../models/diary_entry.dart';
 import '../models/diary_photo.dart';
@@ -26,11 +27,12 @@ class EntryEditorPage extends ConsumerStatefulWidget {
 }
 
 class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
+  QuillController _quillController = QuillController.basic();
   late final TextEditingController _titleController;
-  late final TextEditingController _contentController;
+  final FocusNode _editorFocusNode = FocusNode();
+  final ScrollController _editorScrollController = ScrollController();
 
   DateTime _selectedDate = DateTime.now();
-  List<DiaryPhoto> _photos = <DiaryPhoto>[];
   int? _entryId;
   bool _isLoading = true;
   bool _isSaving = false;
@@ -39,7 +41,6 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
   void initState() {
     super.initState();
     _titleController = TextEditingController();
-    _contentController = TextEditingController();
     _selectedDate = normalizeDate(widget.initialDate ?? DateTime.now());
     _bootstrap();
   }
@@ -47,7 +48,9 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
   @override
   void dispose() {
     _titleController.dispose();
-    _contentController.dispose();
+    _quillController.dispose();
+    _editorFocusNode.dispose();
+    _editorScrollController.dispose();
     super.dispose();
   }
 
@@ -70,8 +73,25 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
       _entryId = entry.id;
       _selectedDate = normalizeDate(entry.entryDate);
       _titleController.text = entry.title;
-      _contentController.text = entry.content;
-      _photos = List<DiaryPhoto>.from(entry.photos);
+
+      if (entry.content.isNotEmpty) {
+        try {
+          final List<dynamic> deltaJson =
+              jsonDecode(entry.content) as List<dynamic>;
+          _quillController = QuillController(
+            document: Document.fromJson(deltaJson),
+            selection: const TextSelection.collapsed(offset: 0),
+          );
+        } catch (_) {
+          // 旧格式纯文本或非法 JSON，当作普通文本处理
+          _quillController = QuillController(
+            document: Document.fromJson(<Map<String, dynamic>>[
+              <String, dynamic>{'insert': '${entry.content}\n'},
+            ]),
+            selection: const TextSelection.collapsed(offset: 0),
+          );
+        }
+      }
     }
 
     setState(() {
@@ -79,39 +99,43 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
     });
   }
 
-  Future<void> _pickPhotos() async {
+  Future<void> _insertImage() async {
     final FilePickerResult? result = await FilePicker.pickFiles(
       type: FileType.image,
-      allowMultiple: true,
+      allowMultiple: false,
     );
-    if (result == null || result.files.isEmpty) {
+    if (result == null || result.files.isEmpty || result.files.first.path == null) {
       return;
     }
 
-    final List<DiaryPhoto> importedPhotos = <DiaryPhoto>[];
-    for (final PlatformFile file in result.files) {
-      if (file.path == null) {
-        continue;
-      }
+    try {
+      final String importedPath = await ref
+          .read(mediaStoreProvider)
+          .importPhoto(result.files.first.path!);
 
-      final String importedPath =
-          await ref.read(mediaStoreProvider).importPhoto(file.path!);
-      importedPhotos.add(
-        DiaryPhoto(
-          localPath: importedPath,
-          sortOrder: _photos.length + importedPhotos.length,
-          createdAt: DateTime.now(),
-        ),
+      final int index = _quillController.selection.baseOffset;
+      final int length =
+          _quillController.selection.extentOffset - index;
+      _quillController.replaceText(
+        index,
+        length,
+        BlockEmbed.image(importedPath),
+        TextSelection.collapsed(offset: index + 1),
+      );
+      _editorScrollController.animateTo(
+        _editorScrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+      _editorFocusNode.requestFocus();
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('图片插入失败：$e')),
       );
     }
-
-    if (!mounted || importedPhotos.isEmpty) {
-      return;
-    }
-
-    setState(() {
-      _photos = <DiaryPhoto>[..._photos, ...importedPhotos];
-    });
   }
 
   Future<void> _pickDate() async {
@@ -133,14 +157,17 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
 
   Future<void> _save() async {
     final String title = _titleController.text.trim();
-    final String content = _contentController.text.trim();
-    if (title.isEmpty && content.isEmpty && _photos.isEmpty) {
+
+    final List<dynamic> deltaList =
+        _quillController.document.toDelta().toJson();
+    final List<Map<String, dynamic>> delta =
+        deltaList.cast<Map<String, dynamic>>();
+    final String contentJson = jsonEncode(delta);
+
+    final String plainText = DiaryEntry.deltaToPlainText(contentJson);
+    if (title.isEmpty && plainText.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            '\u81f3\u5c11\u5199\u4e00\u70b9\u5185\u5bb9\uff0c\u6216\u8005\u52a0\u4e00\u5f20\u56fe\u7247\u3002',
-          ),
-        ),
+        const SnackBar(content: Text('至少写一点内容。')),
       );
       return;
     }
@@ -150,19 +177,14 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
     });
 
     final DateTime now = DateTime.now();
+    final List<DiaryPhoto> inlinePhotos = _extractPhotosFromDelta(delta);
+
     final DiaryEntry entry = DiaryEntry(
       id: _entryId,
       entryDate: _selectedDate,
       title: title,
-      content: content,
-      photos: _photos
-          .asMap()
-          .entries
-          .map(
-            (MapEntry<int, DiaryPhoto> item) =>
-                item.value.copyWith(sortOrder: item.key),
-          )
-          .toList(growable: false),
+      content: contentJson,
+      photos: inlinePhotos,
       createdAt: now,
       updatedAt: now,
     );
@@ -193,6 +215,27 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
     }
   }
 
+  List<DiaryPhoto> _extractPhotosFromDelta(List<Map<String, dynamic>> delta) {
+    final List<DiaryPhoto> photos = <DiaryPhoto>[];
+    int sortOrder = 0;
+    for (final Map<String, dynamic> op in delta) {
+      final dynamic insert = op['insert'];
+      if (insert is Map<String, dynamic>) {
+        final Map<String, dynamic> embed = insert;
+        final String? imagePath = embed['image'] as String?;
+        if (imagePath != null) {
+          photos.add(DiaryPhoto(
+            localPath: imagePath,
+            sortOrder: sortOrder,
+            createdAt: DateTime.now(),
+          ));
+          sortOrder++;
+        }
+      }
+    }
+    return photos;
+  }
+
   Future<void> _delete() async {
     if (_entryId == null) {
       Navigator.of(context).pop();
@@ -203,18 +246,16 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('\u5220\u9664\u8fd9\u7bc7\u65e5\u8bb0\uff1f'),
-          content: const Text(
-            '\u8fd9\u4f1a\u540c\u65f6\u79fb\u9664\u5173\u8054\u56fe\u7247\uff0c\u5f53\u524d\u5b9e\u73b0\u6ca1\u6709\u56de\u6536\u7ad9\u3002',
-          ),
+          title: const Text('删除这篇日记？'),
+          content: const Text('这会同时移除关联图片，当前实现没有回收站。'),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('\u53d6\u6d88'),
+              child: const Text('取消'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('\u5220\u9664'),
+              child: const Text('删除'),
             ),
           ],
         );
@@ -239,12 +280,40 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final Widget toolbar = QuillToolbar.basic(
+      controller: _quillController,
+      multiRowsDisplay: false,
+      showImageButton: false,
+      showCameraButton: false,
+      showVideoButton: false,
+      showInlineCode: false,
+      showCodeBlock: false,
+      showListCheck: false,
+      showIndent: false,
+      showLink: false,
+      showStrikeThrough: false,
+      showSmallButton: false,
+      showColorButton: false,
+      showBackgroundColorButton: false,
+      showAlignmentButtons: false,
+      showHorizontalRule: false,
+      showHistory: true,
+      showBoldButton: true,
+      showItalicButton: true,
+      showUnderLineButton: true,
+      showClearFormat: true,
+      showHeaderStyle: true,
+      showQuote: true,
+      showListNumbers: true,
+      showListBullets: true,
+      toolbarIconSize: 20,
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          _entryId == null
-              ? '\u65b0\u5efa\u65e5\u8bb0'
-              : '\u7f16\u8f91\u65e5\u8bb0',
+          _entryId == null ? '新建日记' : '编辑日记',
         ),
         actions: <Widget>[
           if (_entryId != null)
@@ -257,7 +326,7 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
             child: TextButton(
               onPressed: _isSaving ? null : _save,
               child: Text(
-                _isSaving ? '\u4fdd\u5b58\u4e2d...' : '\u4fdd\u5b58',
+                _isSaving ? '保存中...' : '保存',
               ),
             ),
           ),
@@ -266,10 +335,10 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SafeArea(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+              child: Column(
                 children: <Widget>[
                   Card(
+                    margin: const EdgeInsets.fromLTRB(20, 12, 20, 0),
                     child: Padding(
                       padding: const EdgeInsets.all(18),
                       child: Column(
@@ -284,131 +353,83 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
                           TextField(
                             controller: _titleController,
                             decoration: const InputDecoration(
-                              hintText: '\u6807\u9898\uff0c\u53ef\u7559\u7a7a',
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          TextField(
-                            controller: _contentController,
-                            minLines: 10,
-                            maxLines: null,
-                            decoration: const InputDecoration(
-                              hintText:
-                                  '\u4eca\u5929\u53d1\u751f\u4e86\u4ec0\u4e48\uff1f',
-                              alignLabelWithHint: true,
+                              hintText: '标题，可留空',
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          '\u56fe\u7247',
-                          style: Theme.of(context).textTheme.titleLarge,
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(child: toolbar),
+                        const SizedBox(width: 4),
+                        QuillIconButton(
+                          icon: const Icon(Icons.image_outlined),
+                          size: 40,
+                          fillColor: theme.colorScheme.surfaceContainerHighest,
+                          onPressed: _insertImage,
                         ),
-                      ),
-                      FilledButton.tonalIcon(
-                        onPressed: _pickPhotos,
-                        icon: const Icon(Icons.add_photo_alternate_outlined),
-                        label: const Text('\u6dfb\u52a0\u56fe\u7247'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  if (_photos.isEmpty)
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(18),
-                        child: EmptyState(
-                          icon: Icons.photo_library_outlined,
-                          title: '\u8fd8\u6ca1\u52a0\u56fe\u7247',
-                          message:
-                              '\u7b2c\u4e00\u7248\u4f1a\u628a\u9009\u4e2d\u7684\u56fe\u7247\u590d\u5236\u5230\u5e94\u7528\u76ee\u5f55\uff0c\u907f\u514d\u539f\u59cb\u8def\u5f84\u53d8\u52a8\u5bfc\u81f4\u4e22\u56fe\u3002',
-                        ),
-                      ),
-                    )
-                  else
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: _photos
-                          .asMap()
-                          .entries
-                          .map(
-                            (MapEntry<int, DiaryPhoto> item) => _PhotoTile(
-                              photo: item.value,
-                              onRemove: () {
-                                setState(() {
-                                  _photos = List<DiaryPhoto>.from(_photos)
-                                    ..removeAt(item.key);
-                                });
-                              },
-                            ),
-                          )
-                          .toList(growable: false),
+                      ],
                     ),
+                  ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                      child: Card(
+                        margin: EdgeInsets.zero,
+                        child: QuillEditor(
+                          controller: _quillController,
+                          focusNode: _editorFocusNode,
+                          scrollController: _editorScrollController,
+                          scrollable: true,
+                          padding: const EdgeInsets.all(18),
+                          autoFocus: false,
+                          readOnly: false,
+                          expands: false,
+                          placeholder: '今天发生了什么？',
+                          customStyles: DefaultStyles(
+                            paragraph: DefaultTextBlockStyle(
+                              theme.textTheme.bodyMedium?.copyWith(
+                                    height: 1.6,
+                                  ) ??
+                                  const TextStyle(),
+                              const Tuple2(0, 0),
+                              const Tuple2(8, 8),
+                              null,
+                            ),
+                            h1: DefaultTextBlockStyle(
+                              theme.textTheme.headlineLarge ??
+                                  const TextStyle(),
+                              const Tuple2(8, 8),
+                              const Tuple2(12, 6),
+                              null,
+                            ),
+                            h2: DefaultTextBlockStyle(
+                              theme.textTheme.headlineMedium ??
+                                  const TextStyle(),
+                              const Tuple2(6, 6),
+                              const Tuple2(10, 4),
+                              null,
+                            ),
+                            h3: DefaultTextBlockStyle(
+                              theme.textTheme.headlineSmall ??
+                                  const TextStyle(),
+                              const Tuple2(4, 6),
+                              const Tuple2(8, 4),
+                              null,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-    );
-  }
-}
-
-class _PhotoTile extends StatelessWidget {
-  const _PhotoTile({
-    required this.photo,
-    required this.onRemove,
-  });
-
-  final DiaryPhoto photo;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    final File file = File(photo.localPath);
-
-    return Stack(
-      children: <Widget>[
-        ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: Image.file(
-            file,
-            width: 112,
-            height: 112,
-            fit: BoxFit.cover,
-            errorBuilder:
-                (BuildContext context, Object error, StackTrace? stackTrace) {
-              return Container(
-                width: 112,
-                height: 112,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF0E7D6),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                alignment: Alignment.center,
-                child: const Icon(Icons.broken_image_outlined),
-              );
-            },
-          ),
-        ),
-        Positioned(
-          top: 6,
-          right: 6,
-          child: IconButton.filledTonal(
-            onPressed: onRemove,
-            icon: const Icon(Icons.close),
-            style: IconButton.styleFrom(
-              minimumSize: const Size(30, 30),
-              maximumSize: const Size(30, 30),
-              padding: EdgeInsets.zero,
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

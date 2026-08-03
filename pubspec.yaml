@@ -43,6 +43,7 @@ dependencies:
   sqflite_common_ffi: ^2.3.4+4
   file_picker: ^11.0.2
   flutter_quill: ^2.0.7
+  tuple: ^2.0.2
 
 dev_dependencies:
   flutter_test:

@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../../../../core/utils/date_formats.dart';
@@ -18,6 +16,8 @@ class EntryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final String preview = entry.preview;
+    final bool hasImages = entry.photos.isNotEmpty;
 
     return Card(
       child: InkWell(
@@ -57,44 +57,28 @@ class EntryCard extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                entry.preview,
+                preview,
                 style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
               ),
-              if (entry.photos.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+              if (hasImages) ...<Widget>[
+                const SizedBox(height: 10),
+                Row(
                   children: <Widget>[
-                    for (final photo in entry.photos.take(3))
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child: Image.file(
-                          File(photo.localPath),
-                          fit: BoxFit.cover,
-                          width: 72,
-                          height: 72,
-                          errorBuilder: (BuildContext context, Object _, __) {
-                            return Container(
-                              width: 72,
-                              height: 72,
-                              color: const Color(0xFFF0E7D6),
-                              alignment: Alignment.center,
-                              child: const Icon(Icons.photo_outlined),
-                            );
-                          },
-                        ),
+                    Icon(
+                      Icons.image_outlined,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${entry.photos.length} \u5f20\u56fe\u7247',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
+                    ),
                   ],
                 ),
               ],
-              const SizedBox(height: 12),
-              Text(
-                '${entry.photos.length} \u5f20\u56fe\u7247',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
             ],
           ),
         ),
