@@ -2,9 +2,8 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_quill/flutter_quill.dart' hide Text;
+import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tuple/tuple.dart';
 
 import '../../../core/utils/date_formats.dart';
 import '../data/sqlite_diary_repository.dart';
@@ -83,7 +82,6 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
             selection: const TextSelection.collapsed(offset: 0),
           );
         } catch (_) {
-          // 旧格式纯文本或非法 JSON，当作普通文本处理
           _quillController = QuillController(
             document: Document.fromJson(<Map<String, dynamic>>[
               <String, dynamic>{'insert': '${entry.content}\n'},
@@ -121,11 +119,6 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
         length,
         BlockEmbed.image(importedPath),
         TextSelection.collapsed(offset: index + 1),
-      );
-      _editorScrollController.animateTo(
-        _editorScrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
       );
       _editorFocusNode.requestFocus();
     } catch (e) {
@@ -281,34 +274,6 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final Widget toolbar = QuillToolbar.basic(
-      controller: _quillController,
-      multiRowsDisplay: false,
-      showImageButton: false,
-      showCameraButton: false,
-      showVideoButton: false,
-      showInlineCode: false,
-      showCodeBlock: false,
-      showListCheck: false,
-      showIndent: false,
-      showLink: false,
-      showStrikeThrough: false,
-      showSmallButton: false,
-      showColorButton: false,
-      showBackgroundColorButton: false,
-      showAlignmentButtons: false,
-      showHorizontalRule: false,
-      showHistory: true,
-      showBoldButton: true,
-      showItalicButton: true,
-      showUnderLineButton: true,
-      showClearFormat: true,
-      showHeaderStyle: true,
-      showQuote: true,
-      showListNumbers: true,
-      showListBullets: true,
-      toolbarIconSize: 20,
-    );
 
     return Scaffold(
       appBar: AppBar(
@@ -361,16 +326,44 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Row(
-                      children: <Widget>[
-                        Expanded(child: toolbar),
-                        const SizedBox(width: 4),
-                        QuillIconButton(
+                  QuillSimpleToolbar(
+                    controller: _quillController,
+                    configurations: QuillSimpleToolbarConfigurations(
+                      multiRowsDisplay: false,
+                      showFontFamily: false,
+                      showFontSize: false,
+                      showStrikeThrough: false,
+                      showInlineCode: false,
+                      showColorButton: false,
+                      showBackgroundColorButton: false,
+                      showClearFormat: true,
+                      showAlignmentButtons: false,
+                      showLeftAlignment: false,
+                      showCenterAlignment: false,
+                      showRightAlignment: false,
+                      showJustifyAlignment: false,
+                      showHeaderStyle: true,
+                      showListNumbers: true,
+                      showListBullets: true,
+                      showListCheck: false,
+                      showCodeBlock: false,
+                      showQuote: true,
+                      showIndent: false,
+                      showLink: false,
+                      showUndo: true,
+                      showRedo: true,
+                      showDirection: false,
+                      showSearchButton: false,
+                      showSubscript: false,
+                      showSuperscript: false,
+                      showClipboardCut: false,
+                      showClipboardCopy: false,
+                      showClipboardPaste: false,
+                      showDividers: false,
+                      customButtons: <QuillToolbarCustomButtonOptions>[
+                        QuillToolbarCustomButtonOptions(
                           icon: const Icon(Icons.image_outlined),
-                          size: 40,
-                          fillColor: theme.colorScheme.surfaceContainerHighest,
+                          tooltip: '插入图片',
                           onPressed: _insertImage,
                         ),
                       ],
@@ -385,42 +378,47 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
                           controller: _quillController,
                           focusNode: _editorFocusNode,
                           scrollController: _editorScrollController,
-                          scrollable: true,
-                          padding: const EdgeInsets.all(18),
-                          autoFocus: false,
-                          readOnly: false,
-                          expands: false,
-                          placeholder: '今天发生了什么？',
-                          customStyles: DefaultStyles(
-                            paragraph: DefaultTextBlockStyle(
-                              theme.textTheme.bodyMedium?.copyWith(
-                                    height: 1.6,
-                                  ) ??
-                                  const TextStyle(),
-                              const Tuple2(0, 0),
-                              const Tuple2(8, 8),
-                              null,
-                            ),
-                            h1: DefaultTextBlockStyle(
-                              theme.textTheme.headlineLarge ??
-                                  const TextStyle(),
-                              const Tuple2(8, 8),
-                              const Tuple2(12, 6),
-                              null,
-                            ),
-                            h2: DefaultTextBlockStyle(
-                              theme.textTheme.headlineMedium ??
-                                  const TextStyle(),
-                              const Tuple2(6, 6),
-                              const Tuple2(10, 4),
-                              null,
-                            ),
-                            h3: DefaultTextBlockStyle(
-                              theme.textTheme.headlineSmall ??
-                                  const TextStyle(),
-                              const Tuple2(4, 6),
-                              const Tuple2(8, 4),
-                              null,
+                          configurations: QuillEditorConfigurations(
+                            placeholder: '今天发生了什么？',
+                            padding: const EdgeInsets.all(18),
+                            scrollable: true,
+                            autoFocus: false,
+                            expands: false,
+                            customStyles: DefaultStyles(
+                              paragraph: DefaultTextBlockStyle(
+                                theme.textTheme.bodyMedium?.copyWith(
+                                      height: 1.6,
+                                    ) ??
+                                    const TextStyle(),
+                                const HorizontalSpacing(0, 0),
+                                const VerticalSpacing(0, 0),
+                                const VerticalSpacing(8, 8),
+                                null,
+                              ),
+                              h1: DefaultTextBlockStyle(
+                                theme.textTheme.headlineLarge ??
+                                    const TextStyle(),
+                                const HorizontalSpacing(0, 0),
+                                const VerticalSpacing(8, 8),
+                                const VerticalSpacing(12, 6),
+                                null,
+                              ),
+                              h2: DefaultTextBlockStyle(
+                                theme.textTheme.headlineMedium ??
+                                    const TextStyle(),
+                                const HorizontalSpacing(0, 0),
+                                const VerticalSpacing(6, 6),
+                                const VerticalSpacing(10, 4),
+                                null,
+                              ),
+                              h3: DefaultTextBlockStyle(
+                                theme.textTheme.headlineSmall ??
+                                    const TextStyle(),
+                                const HorizontalSpacing(0, 0),
+                                const VerticalSpacing(4, 6),
+                                const VerticalSpacing(8, 4),
+                                null,
+                              ),
                             ),
                           ),
                         ),
