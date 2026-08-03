@@ -6,10 +6,8 @@ workflows:
     environment:
       flutter: 3.27.5
       xcode: 16.2
-      vars:
-        # 在 Codemagic App settings → Environment variables 中设置这两个变量:
-        # APPLE_ID: your@email.com        (你的 Apple ID 邮箱)
-        # APPLE_TEAM_ID: XXXXXXXXXX       (你的 Team ID，10位字母数字)
+      groups:
+        - skydawn
     triggering:
       events:
         - push
@@ -19,7 +17,9 @@ workflows:
           include: true
     scripts:
       - name: 安装依赖
-        script: flutter pub get
+        script: |
+          flutter pub get
+          gem install xcodeproj
       - name: 配置自动签名
         script: |
           # 设置 Xcode 使用自动签名
