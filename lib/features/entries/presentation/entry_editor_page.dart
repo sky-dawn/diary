@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +11,152 @@ import '../data/sqlite_diary_repository.dart';
 import '../models/diary_entry.dart';
 import '../models/diary_photo.dart';
 import 'providers.dart';
+
+/// 预设图片尺寸及对应最大宽度
+enum ImageSize { sm, md, lg, original }
+
+/// 图片尺寸对应的像素宽度
+const Map<ImageSize, double> _imageSizeWidths = <ImageSize, double>{
+  ImageSize.sm: 200,
+  ImageSize.md: 400,
+  ImageSize.lg: 600,
+  ImageSize.original: double.infinity,
+};
+
+/// 图片尺寸对应的显示标签
+const Map<ImageSize, String> _imageSizeLabels = <ImageSize, String>{
+  ImageSize.sm: '小',
+  ImageSize.md: '中',
+  ImageSize.lg: '大',
+  ImageSize.original: '原始',
+};
+
+/// 编码图片嵌入数据：path + size
+String encodeImageData(String path, ImageSize size) =>
+    jsonEncode(<String, String>{'path': path, 'size': size.name});
+
+/// 解码图片嵌入数据，兼容旧版纯路径格式
+Map<String, dynamic> decodeImageData(String data) {
+  if (data.startsWith('{')) {
+    try {
+      return jsonDecode(data) as Map<String, dynamic>;
+    } catch (_) {}
+  }
+  return <String, dynamic>{'path': data, 'size': ImageSize.md.name};
+}
+
+/// 图片嵌入构建器，支持点击切换预设尺寸
+class ImageEmbedBuilder extends EmbedBuilder {
+  @override
+  String get key => BlockEmbed.imageType;
+
+  @override
+  Widget build(
+    BuildContext context,
+    QuillController controller,
+    Embed node,
+    bool readOnly,
+    bool inline,
+    TextStyle textStyle,
+  ) {
+    final Map<String, dynamic> parsed = decodeImageData(node.value.data);
+    final String imagePath = parsed['path'] as String;
+    final ImageSize size = ImageSize.values.firstWhere(
+      (ImageSize s) => s.name == parsed['size'],
+      orElse: () => ImageSize.md,
+    );
+    final File imageFile = File(imagePath);
+
+    if (!imageFile.existsSync()) {
+      return const SizedBox(
+        height: 120,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(Icons.broken_image_outlined, size: 48),
+              SizedBox(height: 8),
+              Text('图片未找到', style: TextStyle(color: Colors.grey)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 根据尺寸确定宽度
+    final double maxWidth = _imageSizeWidths[size]!;
+    final bool constrained = maxWidth != double.infinity;
+
+    return GestureDetector(
+      onTap: () => _cycleImageSize(controller, node),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxWidth),
+                child: Image.file(
+                  imageFile,
+                  fit: BoxFit.contain,
+                  width: constrained ? maxWidth : null,
+                  errorBuilder: (_, __, ___) => const SizedBox(
+                    height: 120,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Icon(Icons.broken_image_outlined, size: 48),
+                          SizedBox(height: 8),
+                          Text('图片加载失败', style: TextStyle(color: Colors.grey)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                _imageSizeLabels[size]!,
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _cycleImageSize(QuillController controller, Embed node) {
+    final Map<String, dynamic> parsed = decodeImageData(node.value.data);
+    final ImageSize currentSize = ImageSize.values.firstWhere(
+      (ImageSize s) => s.name == parsed['size'],
+      orElse: () => ImageSize.md,
+    );
+    final ImageSize nextSize = ImageSize.values[
+        (currentSize.index + 1) % ImageSize.values.length];
+    final String newData = encodeImageData(
+        parsed['path'] as String, nextSize);
+
+    final int offset = node.documentOffset;
+    controller.replaceText(
+      offset,
+      1,
+      BlockEmbed.image(newData),
+      TextSelection.collapsed(offset: offset + 1),
+    );
+  }
+}
 
 class EntryEditorPage extends ConsumerStatefulWidget {
   const EntryEditorPage({
@@ -111,13 +258,14 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
           .read(mediaStoreProvider)
           .importPhoto(result.files.first.path!);
 
+      final String imageData = encodeImageData(importedPath, ImageSize.md);
       final int index = _quillController.selection.baseOffset;
       final int length =
           _quillController.selection.extentOffset - index;
       _quillController.replaceText(
         index,
         length,
-        BlockEmbed.image(importedPath),
+        BlockEmbed.image(imageData),
         TextSelection.collapsed(offset: index + 1),
       );
       _editorFocusNode.requestFocus();
@@ -215,10 +363,12 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
       final dynamic insert = op['insert'];
       if (insert is Map<String, dynamic>) {
         final Map<String, dynamic> embed = insert;
-        final String? imagePath = embed['image'] as String?;
-        if (imagePath != null) {
+        final String? rawData = embed['image'] as String?;
+        if (rawData != null) {
+          final Map<String, dynamic> parsed = decodeImageData(rawData);
+          final String path = parsed['path'] as String;
           photos.add(DiaryPhoto(
-            localPath: imagePath,
+            localPath: path,
             sortOrder: sortOrder,
             createdAt: DateTime.now(),
           ));
@@ -384,6 +534,9 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
                             scrollable: true,
                             autoFocus: false,
                             expands: false,
+                            embedBuilders: <EmbedBuilder>[
+                              ImageEmbedBuilder(),
+                            ],
                             customStyles: DefaultStyles(
                               paragraph: DefaultTextBlockStyle(
                                 theme.textTheme.bodyMedium?.copyWith(
