@@ -7,8 +7,7 @@ workflows:
       flutter: 3.27.5
       xcode: 16.2
       ios_signing:
-        distribution_type: development
-        bundle_identifier: com.dawn.diary
+        provisioning_profile_type: automatic
     triggering:
       events:
         - push
@@ -23,7 +22,7 @@ workflows:
         script: flutter test || echo "没有测试用例，跳过"
         ignore_failure: true
       - name: 构建 iOS
-        script: flutter build ios --release --no-codesign
+        script: flutter build ios --debug
     artifacts:
-      - build/ios/ipa/*.ipa
+      - build/ios/iphoneos/*.app
       - /tmp/xcodebuild_logs/*.log
