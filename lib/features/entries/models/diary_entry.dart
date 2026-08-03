@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'diary_photo.dart';
 
 class DiaryEntry {
@@ -26,13 +28,37 @@ class DiaryEntry {
   final DateTime? deletedAt;
 
   String get preview {
-    final String normalized = content.replaceAll('\n', ' ').trim();
-    if (normalized.isEmpty) {
-      return '\u8fd9\u4e00\u5929\u4e3b\u8981\u9760\u7167\u7247\u6765\u8bb0\u5f55\u3002';
+    final String text = deltaToPlainText(content);
+    if (text.isEmpty) {
+      if (photos.isNotEmpty) {
+        return '\u8fd9\u4e00\u5929\u4e3b\u8981\u9760\u7167\u7247\u6765\u8bb0\u5f55\u3002';
+      }
+      return '\u7a7a\u5185\u5bb9';
     }
-    return normalized.length > 72
-        ? '${normalized.substring(0, 72)}...'
-        : normalized;
+    return text.length > 72 ? '${text.substring(0, 72)}...' : text;
+  }
+
+  static String deltaToPlainText(String deltaJson) {
+    if (deltaJson.isEmpty) {
+      return '';
+    }
+
+    try {
+      final List<dynamic> ops = jsonDecode(deltaJson) as List<dynamic>;
+      final StringBuffer buffer = StringBuffer();
+      for (final dynamic op in ops) {
+        if (op is Map<String, dynamic>) {
+          final dynamic insert = op['insert'];
+          if (insert is String) {
+            buffer.write(insert);
+          }
+        }
+      }
+      return buffer.toString().replaceAll('\n', ' ').trim();
+    } catch (_) {
+      final String normalized = deltaJson.replaceAll('\n', ' ').trim();
+      return normalized;
+    }
   }
 
   DiaryEntry copyWith({
