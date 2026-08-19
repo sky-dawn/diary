@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/utils/date_formats.dart';
 import '../data/sqlite_diary_repository.dart';
@@ -242,6 +243,30 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
     setState(() {
       _isLoading = false;
     });
+  }
+
+  Future<void> _launchUrl(String url) async {
+    final Uri uri = Uri.tryParse(url) ?? Uri();
+    if (uri.scheme.isEmpty) {
+      return;
+    }
+    try {
+      final bool launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('无法打开链接')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('无法打开链接')),
+        );
+      }
+    }
   }
 
   Future<void> _insertImage() async {
@@ -499,7 +524,7 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
                       showCodeBlock: false,
                       showQuote: true,
                       showIndent: false,
-                      showLink: false,
+                      showLink: true,
                       showUndo: true,
                       showRedo: true,
                       showDirection: false,
@@ -534,6 +559,7 @@ class _EntryEditorPageState extends ConsumerState<EntryEditorPage> {
                             scrollable: true,
                             autoFocus: false,
                             expands: false,
+                            onLaunchUrl: _launchUrl,
                             embedBuilders: <EmbedBuilder>[
                               ImageEmbedBuilder(),
                             ],
